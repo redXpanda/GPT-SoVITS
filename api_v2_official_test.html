@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GPT-SoVITS API 测试台</title>
+<style>
+  :root {
+    --bg: #1a1b26; --card: #24283b; --card2: #1f2335; --fg: #c0caf5;
+    --muted: #565f89; --accent: #7aa2f7; --accent2: #bb9af7;
+    --ok: #9ece6a; --err: #f7768e; --border: #2f3549;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; font-size: 14px; }
+  header { padding: 16px 24px; background: linear-gradient(90deg,#1f2335,#24283b);
+    border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; color: var(--accent2); }
+  .badge { background: var(--card2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 3px 10px; font-size: 12px; color: var(--muted); }
+  .badge b { color: var(--fg); }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 20px; display: grid; gap: 18px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; }
+  .card h2 { font-size: 15px; margin: 0 0 14px; color: var(--accent); display: flex; align-items: center; gap: 8px; }
+  .card h2 .ep { font-size: 11px; color: var(--muted); font-weight: normal;
+    background: var(--card2); padding: 2px 8px; border-radius: 5px; }
+  .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px,1fr)); gap: 12px; }
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field.full { grid-column: 1 / -1; }
+  .field label { font-size: 12px; color: var(--muted); }
+  input, select, textarea { background: var(--card2); border: 1px solid var(--border); color: var(--fg);
+    border-radius: 7px; padding: 8px 10px; font-size: 13px; font-family: inherit; outline: none; width: 100%; }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 70px; }
+  button { background: var(--accent); color: #1a1b26; border: none; border-radius: 8px;
+    padding: 9px 18px; font-size: 13px; font-weight: 600; cursor: pointer; transition: filter .15s; }
+  button:hover { filter: brightness(1.1); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.ghost { background: var(--card2); color: var(--fg); border: 1px solid var(--border); }
+  button.danger { background: var(--err); color: #1a1b26; }
+  .btn-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+  details { margin-top: 12px; border-top: 1px dashed var(--border); padding-top: 12px; }
+  summary { cursor: pointer; color: var(--accent2); font-size: 13px; user-select: none; }
+  .status { font-size: 12px; padding: 4px 0; min-height: 18px; }
+  .status.ok { color: var(--ok); } .status.err { color: var(--err); } .status.run { color: var(--accent); }
+  audio { width: 100%; margin-top: 12px; }
+  pre { background: var(--card2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px; overflow: auto; font-size: 12px; color: var(--muted); max-height: 220px; margin: 10px 0 0; }
+  .hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <h1>&#x1F431; GPT-SoVITS API 测试台</h1>
+  <span class="badge">版本 <b id="v-version">-</b></span>
+  <span class="badge">设备 <b id="v-device">-</b></span>
+  <span class="badge">半精度 <b id="v-half">-</b></span>
+  <span class="badge">语言 <b id="v-langs">-</b></span>
+</header>
+<div class="wrap">
+  <div class="card">
+    <h2>语音合成 <span class="ep">POST /tts</span></h2>
+    <div class="row">
+      <div class="field full">
+        <label>目标文本 text *</label>
+        <textarea id="text">先帝创业未半而中道崩殂，今天下三分，益州疲弊，此诚危急存亡之秋也。</textarea>
+      </div>
+      <div class="field">
+        <label>文本语言 text_lang *</label>
+        <select id="text_lang"></select>
+      </div>
+      <div class="field">
+        <label>切分方法 text_split_method</label>
+        <select id="text_split_method"></select>
+      </div>
+      <div class="field full">
+        <label>参考音频路径 ref_audio_path *（服务器本地路径）</label>
+        <input id="ref_audio_path" placeholder="如 archive_jingyuan_1.wav 或绝对路径">
+      </div>
+      <div class="field full">
+        <label>参考音频文本 prompt_text</label>
+        <textarea id="prompt_text">我是「罗浮」云骑将军景元。不必拘谨，「将军」只是一时的身份，你称呼我景元便可</textarea>
+      </div>
+      <div class="field">
+        <label>参考音频语言 prompt_lang *</label>
+        <select id="prompt_lang"></select>
+      </div>
+      <div class="field">
+        <label>输出格式 media_type</label>
+        <select id="media_type">
+          <option value="wav">wav</option>
+          <option value="ogg">ogg</option>
+          <option value="aac">aac</option>
+          <option value="raw">raw</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>流式模式 streaming_mode</label>
+        <select id="streaming_mode">
+          <option value="0">0 - 关闭</option>
+          <option value="1">1 - 最佳质量(慢)</option>
+          <option value="2">2 - 中等质量</option>
+          <option value="3">3 - 较低质量(快)</option>
+        </select>
+      </div>
+    </div>
+
+    <details>
+      <summary>高级参数（采样 / 批处理 / 速度等）</summary>
+      <div class="row" style="margin-top:12px">
+        <div class="field"><label>top_k</label><input id="top_k" type="number" value="15"></div>
+        <div class="field"><label>top_p</label><input id="top_p" type="number" step="0.05" value="1"></div>
+        <div class="field"><label>temperature</label><input id="temperature" type="number" step="0.05" value="1"></div>
+        <div class="field"><label>speed_factor</label><input id="speed_factor" type="number" step="0.05" value="1.0"></div>
+        <div class="field"><label>batch_size</label><input id="batch_size" type="number" value="1"></div>
+        <div class="field"><label>batch_threshold</label><input id="batch_threshold" type="number" step="0.05" value="0.75"></div>
+        <div class="field"><label>fragment_interval</label><input id="fragment_interval" type="number" step="0.05" value="0.3"></div>
+        <div class="field"><label>repetition_penalty</label><input id="repetition_penalty" type="number" step="0.05" value="1.35"></div>
+        <div class="field"><label>sample_steps (V3)</label><input id="sample_steps" type="number" value="32"></div>
+        <div class="field"><label>seed</label><input id="seed" type="number" value="-1"></div>
+        <div class="field"><label>overlap_length</label><input id="overlap_length" type="number" value="2"></div>
+        <div class="field"><label>min_chunk_length</label><input id="min_chunk_length" type="number" value="16"></div>
+        <div class="field"><label>aux_ref_audio_paths（逗号分隔，可空）</label><input id="aux_ref_audio_paths" placeholder="路径1, 路径2"></div>
+        <div class="field"><label>split_bucket</label><select id="split_bucket"><option value="true">true</option><option value="false">false</option></select></div>
+        <div class="field"><label>parallel_infer</label><select id="parallel_infer"><option value="true">true</option><option value="false">false</option></select></div>
+        <div class="field"><label>super_sampling (V3)</label><select id="super_sampling"><option value="false">false</option><option value="true">true</option></select></div>
+      </div>
+    </details>
+
+    <div class="btn-row">
+      <button id="btn-tts">合成语音</button>
+      <button class="ghost" id="btn-tts-url">复制 GET 链接</button>
+      <span class="status" id="tts-status"></span>
+    </div>
+    <audio id="tts-audio" controls style="display:none"></audio>
+  </div>
+
+  <div class="card">
+    <h2>设置参考音频 <span class="ep">GET /set_refer_audio</span></h2>
+    <div class="field full">
+      <label>参考音频路径 refer_audio_path</label>
+      <input id="refer_audio_path" placeholder="服务器本地音频路径">
+    </div>
+    <div class="btn-row">
+      <button class="ghost" id="btn-refer">设置参考音频</button>
+      <span class="status" id="refer-status"></span>
+    </div>
+    <p class="hint">设置后，/tts 接口仍需传 ref_audio_path；此接口主要用于预加载缓存喵～</p>
+  </div>
+
+  <div class="card">
+    <h2>切换模型权重 <span class="ep">GET /set_gpt_weights · /set_sovits_weights</span></h2>
+    <div class="row">
+      <div class="field full">
+        <label>GPT 权重路径 (.ckpt)</label>
+        <input id="gpt_weights" placeholder="GPT_SoVITS/pretrained_models/xxx.ckpt">
+      </div>
+      <div class="field full">
+        <label>SoVITS 权重路径 (.pth)</label>
+        <input id="sovits_weights" placeholder="GPT_SoVITS/pretrained_models/xxx.pth">
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="ghost" id="btn-gpt">切换 GPT 模型</button>
+      <button class="ghost" id="btn-sovits">切换 SoVITS 模型</button>
+      <span class="status" id="weights-status"></span>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>服务控制 <span class="ep">GET /control</span></h2>
+    <div class="btn-row">
+      <button class="danger" id="btn-restart">重启服务 (restart)</button>
+      <button class="danger" id="btn-exit">关闭服务 (exit)</button>
+      <span class="status" id="control-status"></span>
+    </div>
+    <p class="hint">⚠️ 危险操作：restart 会重启进程、exit 会终止服务，点击前请确认喵～</p>
+  </div>
+
+  <div class="card">
+    <h2>响应日志</h2>
+    <div class="btn-row"><button class="ghost" id="btn-clear-log">清空日志</button></div>
+    <pre id="log">等待操作...</pre>
+  </div>
+
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const API = location.origin;
+let lastAudioUrl = null;
+
+function log(msg, obj) {
+  const el = $("log");
+  const time = new Date().toLocaleTimeString();
+  let line = `[${time}] ${msg}`;
+  if (obj !== undefined) line += "\n" + (typeof obj === "string" ? obj : JSON.stringify(obj, null, 2));
+  el.textContent = (el.textContent === "等待操作..." ? "" : el.textContent + "\n\n") + line;
+  el.scrollTop = el.scrollHeight;
+}
+
+function setStatus(id, text, cls) {
+  const el = $(id);
+  el.textContent = text;
+  el.className = "status" + (cls ? " " + cls : "");
+}
+
+// 收集 /tts 请求参数喵～
+function buildTTSPayload() {
+  const aux = $("aux_ref_audio_paths").value.trim();
+  const payload = {
+    text: $("text").value,
+    text_lang: $("text_lang").value,
+    ref_audio_path: $("ref_audio_path").value,
+    aux_ref_audio_paths: aux ? aux.split(",").map(s => s.trim()).filter(Boolean) : null,
+    prompt_text: $("prompt_text").value,
+    prompt_lang: $("prompt_lang").value,
+    top_k: parseInt($("top_k").value),
+    top_p: parseFloat($("top_p").value),
+    temperature: parseFloat($("temperature").value),
+    text_split_method: $("text_split_method").value,
+    batch_size: parseInt($("batch_size").value),
+    batch_threshold: parseFloat($("batch_threshold").value),
+    split_bucket: $("split_bucket").value === "true",
+    speed_factor: parseFloat($("speed_factor").value),
+    fragment_interval: parseFloat($("fragment_interval").value),
+    seed: parseInt($("seed").value),
+    media_type: $("media_type").value,
+    streaming_mode: parseInt($("streaming_mode").value),
+    parallel_infer: $("parallel_infer").value === "true",
+    repetition_penalty: parseFloat($("repetition_penalty").value),
+    sample_steps: parseInt($("sample_steps").value),
+    super_sampling: $("super_sampling").value === "true",
+    overlap_length: parseInt($("overlap_length").value),
+    min_chunk_length: parseInt($("min_chunk_length").value),
+  };
+  // 剔除 NaN(空数字框) 和 null(如空的 aux_ref_audio_paths)，
+  // 这些非可选字段传给后端会触发 422 校验失败，删掉即走默认值喵～
+  for (const k of Object.keys(payload)) {
+    const v = payload[k];
+    if (v === null || (typeof v === "number" && Number.isNaN(v))) {
+      delete payload[k];
+    }
+  }
+  return payload;
+}
+
+// 加载配置并填充下拉框
+async function loadConfig() {
+  try {
+    const resp = await fetch(API + "/tts_config");
+    const cfg = await resp.json();
+    $("v-version").textContent = cfg.version;
+    $("v-device").textContent = cfg.device;
+    $("v-half").textContent = cfg.is_half ? "是" : "否";
+    $("v-langs").textContent = cfg.languages.join(", ");
+    for (const sel of [$("text_lang"), $("prompt_lang")]) {
+      sel.innerHTML = cfg.languages.map(l => `<option value="${l}">${l}</option>`).join("");
+    }
+    const cutDesc = {
+      cut0: "不切", cut1: "凑四句一切", cut2: "凑50字一切",
+      cut3: "按中文句号。切", cut4: "按英文句号.切", cut5: "按标点符号切",
+    };
+    $("text_split_method").innerHTML = cfg.cut_methods
+      .map(m => `<option value="${m}">${m}${cutDesc[m] ? " (" + cutDesc[m] + ")" : ""}</option>`)
+      .join("");
+    if (cfg.languages.includes("zh")) { $("text_lang").value = "zh"; $("prompt_lang").value = "zh"; }
+    if (cfg.cut_methods.includes("cut5")) $("text_split_method").value = "cut5";
+    log("配置加载成功", cfg);
+  } catch (e) {
+    log("配置加载失败，请确认服务已启动", String(e));
+    $("v-version").textContent = "离线";
+  }
+}
+
+// 合成语音
+async function doTTS() {
+  const payload = buildTTSPayload();
+  if (!payload.text || !payload.ref_audio_path) {
+    setStatus("tts-status", "text 与 ref_audio_path 为必填项喵～", "err");
+    return;
+  }
+  setStatus("tts-status", "合成中，请稍候...", "run");
+  $("btn-tts").disabled = true;
+  log("POST /tts 请求", payload);
+  const t0 = performance.now();
+  try {
+    const resp = await fetch(API + "/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const ct = resp.headers.get("Content-Type") || "";
+    if (!resp.ok || ct.includes("application/json")) {
+      const err = await resp.json();
+      setStatus("tts-status", "合成失败 (HTTP " + resp.status + ")", "err");
+      log("合成失败", err);
+      return;
+    }
+    const blob = await resp.blob();
+    if (lastAudioUrl) URL.revokeObjectURL(lastAudioUrl);
+    lastAudioUrl = URL.createObjectURL(blob);
+    const audio = $("tts-audio");
+    audio.src = lastAudioUrl;
+    audio.style.display = "block";
+    audio.play().catch(() => {});
+    const cost = ((performance.now() - t0) / 1000).toFixed(2);
+    setStatus("tts-status", `合成成功，耗时 ${cost}s，大小 ${(blob.size / 1024).toFixed(1)} KB`, "ok");
+    log(`合成成功 (${ct}, ${cost}s, ${blob.size} bytes)`);
+  } catch (e) {
+    setStatus("tts-status", "请求异常: " + e, "err");
+    log("请求异常", String(e));
+  } finally {
+    $("btn-tts").disabled = false;
+  }
+}
+
+// 生成 GET 链接并复制
+function copyGetUrl() {
+  const p = buildTTSPayload();
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(p)) {
+    if (v === null || v === "" || Array.isArray(v)) continue;
+    params.append(k, v);
+  }
+  const url = API + "/tts?" + params.toString();
+  navigator.clipboard.writeText(url).then(
+    () => setStatus("tts-status", "GET 链接已复制到剪贴板喵～", "ok"),
+    () => setStatus("tts-status", "复制失败，链接见日志", "err")
+  );
+  log("GET 链接", url);
+}
+
+// 通用 GET 请求封装
+async function simpleGet(url, statusId, label) {
+  setStatus(statusId, "请求中...", "run");
+  log(label + " -> " + url);
+  try {
+    const resp = await fetch(url);
+    let data;
+    try { data = await resp.json(); } catch { data = await resp.text(); }
+    if (resp.ok) {
+      setStatus(statusId, "成功: " + (data.message || data), "ok");
+    } else {
+      setStatus(statusId, "失败 (HTTP " + resp.status + ")", "err");
+    }
+    log(label + " 响应 (HTTP " + resp.status + ")", data);
+  } catch (e) {
+    setStatus(statusId, "异常: " + e, "err");
+    log(label + " 异常", String(e));
+  }
+}
+
+// 事件绑定
+$("btn-tts").onclick = doTTS;
+$("btn-tts-url").onclick = copyGetUrl;
+$("btn-refer").onclick = () => {
+  const p = $("refer_audio_path").value.trim();
+  if (!p) return setStatus("refer-status", "请填写路径喵～", "err");
+  simpleGet(API + "/set_refer_audio?refer_audio_path=" + encodeURIComponent(p), "refer-status", "GET /set_refer_audio");
+};
+$("btn-gpt").onclick = () => {
+  const p = $("gpt_weights").value.trim();
+  if (!p) return setStatus("weights-status", "请填写 GPT 权重路径喵～", "err");
+  simpleGet(API + "/set_gpt_weights?weights_path=" + encodeURIComponent(p), "weights-status", "GET /set_gpt_weights");
+};
+$("btn-sovits").onclick = () => {
+  const p = $("sovits_weights").value.trim();
+  if (!p) return setStatus("weights-status", "请填写 SoVITS 权重路径喵～", "err");
+  simpleGet(API + "/set_sovits_weights?weights_path=" + encodeURIComponent(p), "weights-status", "GET /set_sovits_weights");
+};
+$("btn-restart").onclick = () => {
+  if (!confirm("确定要重启服务吗？重启期间接口将短暂不可用喵～")) return;
+  simpleGet(API + "/control?command=restart", "control-status", "GET /control restart");
+};
+$("btn-exit").onclick = () => {
+  if (!confirm("确定要关闭服务吗？关闭后需手动重新启动喵～")) return;
+  simpleGet(API + "/control?command=exit", "control-status", "GET /control exit");
+};
+$("btn-clear-log").onclick = () => { $("log").textContent = "等待操作..."; };
+
+loadConfig();
+</script>
+</body>
+</html>

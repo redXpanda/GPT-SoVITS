@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GPT-SoVITS OpenAI API 测试台</title>
+<style>
+  :root {
+    --bg: #1a1b26; --card: #24283b; --card2: #1f2335; --fg: #c0caf5;
+    --muted: #565f89; --accent: #7aa2f7; --accent2: #bb9af7;
+    --ok: #9ece6a; --err: #f7768e; --border: #2f3549;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif; font-size: 14px; }
+  header { padding: 16px 24px; background: linear-gradient(90deg,#1f2335,#24283b);
+    border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  header h1 { font-size: 18px; margin: 0; color: var(--accent2); }
+  .badge { background: var(--card2); border: 1px solid var(--border); border-radius: 6px;
+    padding: 3px 10px; font-size: 12px; color: var(--muted); }
+  .badge b { color: var(--fg); }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 20px; display: grid; gap: 18px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; }
+  .card h2 { font-size: 15px; margin: 0 0 14px; color: var(--accent); display: flex; align-items: center; gap: 8px; }
+  .card h2 .ep { font-size: 11px; color: var(--muted); font-weight: normal;
+    background: var(--card2); padding: 2px 8px; border-radius: 5px; }
+  .row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px,1fr)); gap: 12px; }
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field.full { grid-column: 1 / -1; }
+  .field label { font-size: 12px; color: var(--muted); }
+  input, select, textarea { background: var(--card2); border: 1px solid var(--border); color: var(--fg);
+    border-radius: 7px; padding: 8px 10px; font-size: 13px; font-family: inherit; outline: none; width: 100%; }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 80px; }
+  button { background: var(--accent); color: #1a1b26; border: none; border-radius: 8px;
+    padding: 9px 18px; font-size: 13px; font-weight: 600; cursor: pointer; transition: filter .15s; }
+  button:hover { filter: brightness(1.1); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.ghost { background: var(--card2); color: var(--fg); border: 1px solid var(--border); }
+  .btn-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+  .status { font-size: 12px; padding: 4px 0; min-height: 18px; }
+  .status.ok { color: var(--ok); } .status.err { color: var(--err); } .status.run { color: var(--accent); }
+  audio { width: 100%; margin-top: 12px; }
+  pre { background: var(--card2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px; overflow: auto; font-size: 12px; color: var(--muted); max-height: 240px; margin: 10px 0 0; }
+  .hint { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  code { background: var(--card2); padding: 1px 5px; border-radius: 4px; color: var(--accent2); }
+</style>
+</head>
+<body>
+<header>
+  <h1>&#x1F431; GPT-SoVITS · OpenAI 兼容 API 测试台</h1>
+  <span class="badge">模型 <b id="v-model">-</b></span>
+  <span class="badge">当前音色 <b id="v-loaded">-</b></span>
+</header>
+<div class="wrap">
+  <div class="card">
+    <h2>语音合成 <span class="ep">POST /v1/audio/speech</span></h2>
+    <div class="row">
+      <div class="field full">
+        <label>input（要合成的文本）</label>
+        <textarea id="input">こんにちは、今日はいい天気ですね。一緒にお散歩でもどうですか？</textarea>
+      </div>
+      <div class="field">
+        <label>voice（音色 → preset）</label>
+        <select id="voice"><option value="">加载中...</option></select>
+      </div>
+      <div class="field">
+        <label>response_format</label>
+        <select id="response_format">
+          <option value="mp3">mp3</option>
+          <option value="wav">wav</option>
+          <option value="pcm">pcm</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>speed（语速 0.25~4）</label>
+        <input id="speed" type="number" step="0.05" value="1.0" min="0.25" max="4">
+      </div>
+      <div class="field">
+        <label>stream（流式）</label>
+        <select id="stream">
+          <option value="false">false（完整）</option>
+          <option value="true">true（分块流式）</option>
+        </select>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button id="btn-speak">合成播放</button>
+      <button class="ghost" id="btn-curl">复制 curl</button>
+      <span class="status" id="speak-status"></span>
+    </div>
+    <audio id="audio" controls style="display:none"></audio>
+    <p class="hint">首次切换 voice 会加载对应角色模型（较慢），之后同音色复用喵～</p>
+  </div>
+
+  <div class="card">
+    <h2>音色列表 <span class="ep">GET /v1/audio/voices</span></h2>
+    <div class="btn-row">
+      <button class="ghost" id="btn-voices">刷新音色列表</button>
+      <span class="status" id="voices-status"></span>
+    </div>
+    <pre id="voices-out">点击刷新查看可用音色...</pre>
+  </div>
+
+  <div class="card">
+    <h2>响应日志</h2>
+    <div class="btn-row"><button class="ghost" id="btn-clear">清空日志</button></div>
+    <pre id="log">等待操作...</pre>
+  </div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const API = location.origin;
+let lastUrl = null;
+
+function log(msg, obj) {
+  const el = $("log");
+  const t = new Date().toLocaleTimeString();
+  let line = `[${t}] ${msg}`;
+  if (obj !== undefined) line += "\n" + (typeof obj === "string" ? obj : JSON.stringify(obj, null, 2));
+  el.textContent = (el.textContent === "等待操作..." ? "" : el.textContent + "\n\n") + line;
+  el.scrollTop = el.scrollHeight;
+}
+function setStatus(id, text, cls) {
+  const el = $(id);
+  el.textContent = text;
+  el.className = "status" + (cls ? " " + cls : "");
+}
+
+// 加载模型名
+async function loadModels() {
+  try {
+    const r = await fetch(API + "/v1/models");
+    const d = await r.json();
+    $("v-model").textContent = d.data?.[0]?.id || "-";
+  } catch (e) { $("v-model").textContent = "离线"; }
+}
+
+// 加载当前已加载音色(health)
+async function loadHealth() {
+  try {
+    const r = await fetch(API + "/health");
+    const d = await r.json();
+    $("v-loaded").textContent = d.loaded_preset || "(未加载)";
+  } catch (e) { $("v-loaded").textContent = "-"; }
+}
+
+// 加载音色列表
+async function loadVoices() {
+  setStatus("voices-status", "请求中...", "run");
+  try {
+    const r = await fetch(API + "/v1/audio/voices");
+    const d = await r.json();
+    const items = d.data || [];
+    const sel = $("voice");
+    if (items.length === 0) {
+      sel.innerHTML = '<option value="">(presets 目录为空)</option>';
+    } else {
+      sel.innerHTML = items
+        .map(v => `<option value="${v.id}">${v.display_name || v.id}${v.has_reference ? "" : " [无参考音频]"}</option>`)
+        .join("");
+    }
+    $("voices-out").textContent = JSON.stringify(items, null, 2);
+    setStatus("voices-status", `共 ${items.length} 个音色`, "ok");
+    log("GET /v1/audio/voices", items);
+  } catch (e) {
+    setStatus("voices-status", "失败: " + e, "err");
+    $("voice").innerHTML = '<option value="">加载失败</option>';
+  }
+}
+
+// 构造请求体
+function buildBody() {
+  return {
+    model: $("v-model").textContent || "gpt-sovits",
+    input: $("input").value,
+    voice: $("voice").value,
+    response_format: $("response_format").value,
+    speed: parseFloat($("speed").value) || 1.0,
+    stream: $("stream").value === "true",
+  };
+}
+
+// 合成
+async function speak() {
+  const body = buildBody();
+  if (!body.input.trim()) return setStatus("speak-status", "input 不能为空喵～", "err");
+  setStatus("speak-status", "合成中(首次切换音色较慢)...", "run");
+  $("btn-speak").disabled = true;
+  log("POST /v1/audio/speech", body);
+  const t0 = performance.now();
+  try {
+    const r = await fetch(API + "/v1/audio/speech", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer sk-test" },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) {
+      let err; try { err = await r.json(); } catch { err = await r.text(); }
+      setStatus("speak-status", "失败 (HTTP " + r.status + ")", "err");
+      log("合成失败", err);
+      return;
+    }
+    const blob = await r.blob();
+    if (lastUrl) URL.revokeObjectURL(lastUrl);
+    lastUrl = URL.createObjectURL(blob);
+    const a = $("audio");
+    a.src = lastUrl;
+    a.style.display = "block";
+    a.play().catch(() => {});
+    const cost = ((performance.now() - t0) / 1000).toFixed(2);
+    setStatus("speak-status", `成功 ${cost}s · ${(blob.size / 1024).toFixed(1)} KB · ${blob.type}`, "ok");
+    log(`合成成功 (${cost}s, ${blob.size} bytes, ${blob.type})`);
+    loadHealth();
+  } catch (e) {
+    setStatus("speak-status", "异常: " + e, "err");
+    log("请求异常", String(e));
+  } finally {
+    $("btn-speak").disabled = false;
+  }
+}
+
+// 复制 curl
+function copyCurl() {
+  const body = buildBody();
+  const cmd = `curl -X POST ${API}/v1/audio/speech \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer sk-anything" \\
+  -d '${JSON.stringify(body)}' \\
+  --output out.${body.response_format}`;
+  navigator.clipboard.writeText(cmd).then(
+    () => setStatus("speak-status", "curl 已复制喵～", "ok"),
+    () => setStatus("speak-status", "复制失败，见日志", "err")
+  );
+  log("curl 命令", cmd);
+}
+
+$("btn-speak").onclick = speak;
+$("btn-curl").onclick = copyCurl;
+$("btn-voices").onclick = loadVoices;
+$("btn-clear").onclick = () => { $("log").textContent = "等待操作..."; };
+
+loadModels();
+loadHealth();
+loadVoices();
+</script>
+</body>
+</html>
