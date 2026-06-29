@@ -675,6 +675,223 @@ def close1Bb():
     )
 
 
+process_name_1bab = i18n("一键训练")
+bab_stop_flag = False
+
+
+def open1Bab(
+    version,
+    batch_size,
+    total_epoch,
+    exp_name,
+    text_low_lr_rate,
+    if_save_latest,
+    if_save_every_weights,
+    save_every_epoch,
+    gpu_numbers1Ba,
+    pretrained_s2G,
+    pretrained_s2D,
+    if_grad_ckpt,
+    lora_rank,
+    batch_size1Bb,
+    total_epoch1Bb,
+    if_dpo,
+    if_save_latest1Bb,
+    if_save_every_weights1Bb,
+    save_every_epoch1Bb,
+    gpu_numbers1Bb,
+    pretrained_s1,
+):
+    """一键训练: 先跑 SoVITS(open1Ba) 完成后自动接 GPT(open1Bb)。复用两个原生成器的同构 5 元组输出。"""
+    global bab_stop_flag, p_train_SoVITS, p_train_GPT
+    bab_stop_flag = False
+
+    # ---- 阶段1: SoVITS 训练 ----
+    for item in open1Ba(
+        version,
+        batch_size,
+        total_epoch,
+        exp_name,
+        text_low_lr_rate,
+        if_save_latest,
+        if_save_every_weights,
+        save_every_epoch,
+        gpu_numbers1Ba,
+        pretrained_s2G,
+        pretrained_s2D,
+        if_grad_ckpt,
+        lora_rank,
+    ):
+        info, _b_open, _b_close, sd, gd = item
+        # 串联期间始终展示"终止"按钮(隐藏开始按钮), 避免阶段切换时闪烁
+        yield (
+            "[1/2 %s] %s" % (i18n("SoVITS训练"), info),
+            {"__type__": "update", "visible": False},
+            {"__type__": "update", "visible": True},
+            sd,
+            gd,
+        )
+
+    # 被手动终止则不再进入 GPT 阶段
+    if bab_stop_flag:
+        SoVITS_dropdown_update, GPT_dropdown_update = change_choices()
+        yield (
+            process_info(process_name_1bab, "closed"),
+            {"__type__": "update", "visible": True},
+            {"__type__": "update", "visible": False},
+            SoVITS_dropdown_update,
+            GPT_dropdown_update,
+        )
+        return
+
+    # ---- 阶段2: GPT 训练 ----
+    for item in open1Bb(
+        batch_size1Bb,
+        total_epoch1Bb,
+        exp_name,
+        if_dpo,
+        if_save_latest1Bb,
+        if_save_every_weights1Bb,
+        save_every_epoch1Bb,
+        gpu_numbers1Bb,
+        pretrained_s1,
+    ):
+        info, _b_open, _b_close, sd, gd = item
+        is_last = isinstance(info, str) and process_info(process_name_gpt, "finish") in info
+        yield (
+            "[2/2 %s] %s" % (i18n("GPT训练"), info),
+            {"__type__": "update", "visible": is_last},
+            {"__type__": "update", "visible": not is_last},
+            sd,
+            gd,
+        )
+
+
+def close1Bab():
+    """终止一键训练: 设置中断标记并杀掉当前活跃的训练进程。"""
+    global bab_stop_flag
+    bab_stop_flag = True
+    if p_train_SoVITS is not None:
+        close1Ba()
+    if p_train_GPT is not None:
+        close1Bb()
+    return (
+        process_info(process_name_1bab, "closed"),
+        {"__type__": "update", "visible": True},
+        {"__type__": "update", "visible": False},
+    )
+
+
+def _resolve_weight_path(dropdown_val):
+    """把权重下拉框的值(项目相对路径)解析为真实文件路径; 底模别名等非训练产物返回 None。"""
+    if not dropdown_val:
+        return None
+    cand = os.path.join(now_dir, dropdown_val)
+    if os.path.exists(cand) and dropdown_val.endswith((".pth", ".ckpt")):
+        return cand
+    return None
+
+
+def do_export_preset(
+    exp_name_v,
+    target_root,
+    slice_list_v,
+    sovits_sel,
+    gpt_sel,
+    prompt_lang_v,
+    ref_audio_v,
+    display_name_v,
+):
+    """汇总 preset: 复制 slice(list+语音文件夹) 与两个训练权重到 目标根/实验名/, 改写 list 路径, 生成 preset.json。"""
+    import traceback
+
+    try:
+        exp_name_v = (exp_name_v or "").strip().rstrip(" ")
+        target_root = my_utils.clean_path(target_root or "")
+        slice_list_v = my_utils.clean_path(slice_list_v or "")
+        ref_audio_v = my_utils.clean_path(ref_audio_v or "")
+        if not exp_name_v:
+            return i18n("失败") + ": 实验/模型名不能为空"
+        if not target_root:
+            return i18n("失败") + ": 目标根路径不能为空"
+        sovits_src = _resolve_weight_path(sovits_sel)
+        gpt_src = _resolve_weight_path(gpt_sel)
+        if sovits_src is None:
+            return i18n("失败") + ": 请在下拉框选择训练产物 SoVITS 权重(.pth, 非底模)"
+        if gpt_src is None:
+            return i18n("失败") + ": 请在下拉框选择训练产物 GPT 权重(.ckpt, 非底模)"
+        if not os.path.isfile(slice_list_v):
+            return i18n("失败") + ": slice list 文件不存在: %s" % slice_list_v
+
+        target_dir = os.path.join(target_root, exp_name_v)
+        os.makedirs(target_dir, exist_ok=True)
+        logs = []
+
+        # 1) 复制两个权重(保留原文件名)
+        sovits_dst = os.path.join(target_dir, os.path.basename(sovits_src))
+        gpt_dst = os.path.join(target_dir, os.path.basename(gpt_src))
+        shutil.copy2(sovits_src, sovits_dst)
+        shutil.copy2(gpt_src, gpt_dst)
+        logs.append("SoVITS权重 -> %s" % sovits_dst)
+        logs.append("GPT权重    -> %s" % gpt_dst)
+
+        # 2) 读 list, 从首行第一列推断 slice 语音文件夹
+        with open(slice_list_v, "r", encoding="utf-8") as f:
+            lines = [ln.rstrip("\n") for ln in f if ln.strip()]
+        if not lines:
+            return i18n("失败") + ": slice list 内容为空"
+        slicer_src_dir = os.path.dirname(lines[0].split("|")[0])
+        if not os.path.isdir(slicer_src_dir):
+            return i18n("失败") + ": 无法定位 slice 语音文件夹: %s" % slicer_src_dir
+
+        # 3) 复制 slice 语音文件夹
+        slicer_dst_dir = os.path.join(target_dir, os.path.basename(slicer_src_dir))
+        if os.path.abspath(slicer_src_dir) != os.path.abspath(slicer_dst_dir):
+            shutil.copytree(slicer_src_dir, slicer_dst_dir, dirs_exist_ok=True)
+        logs.append("语音文件夹 -> %s" % slicer_dst_dir)
+
+        # 4) 改写 list 每行第一列(重指向新 slicer 目录), 写入目标目录
+        new_list_path = os.path.join(target_dir, os.path.basename(slice_list_v))
+        new_lines = []
+        for ln in lines:
+            parts = ln.split("|")
+            parts[0] = os.path.join(slicer_dst_dir, os.path.basename(parts[0]))
+            new_lines.append("|".join(parts))
+        with open(new_list_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(new_lines) + "\n")
+        logs.append("slice list -> %s (路径已改写)" % new_list_path)
+
+        # 5) 参考音改写到新 slicer 目录(未填则取 list 首条)
+        ref_base = os.path.basename(ref_audio_v) if ref_audio_v else os.path.basename(lines[0].split("|")[0])
+        ref_audio_new = os.path.join(slicer_dst_dir, ref_base)
+
+        # 6) 生成自包含 preset.json -> presets/{exp_name}.json 与 目标目录各一份
+        preset = {
+            "display_name": display_name_v or exp_name_v,
+            "gpt_weights": gpt_dst,
+            "sovits_weights": sovits_dst,
+            "ref_list_file": new_list_path,
+            "prompt_lang": prompt_lang_v or "zh",
+            "default_ref_audio": ref_audio_new,
+        }
+        preset_text = json.dumps(preset, ensure_ascii=False, indent=2)
+        preset_path = os.path.join(now_dir, "presets", "%s.json" % exp_name_v)
+        os.makedirs(os.path.dirname(preset_path), exist_ok=True)
+        with open(preset_path, "w", encoding="utf-8") as f:
+            f.write(preset_text)
+        logs.append("preset.json -> %s" % preset_path)
+        # 目标目录再放一份, 使该目录自包含
+        preset_path_target = os.path.join(target_dir, "%s.json" % exp_name_v)
+        with open(preset_path_target, "w", encoding="utf-8") as f:
+            f.write(preset_text)
+        logs.append("preset.json -> %s" % preset_path_target)
+
+        return i18n("已完成") + ":\n" + "\n".join(logs)
+    except Exception:
+        return i18n("失败") + ":\n" + traceback.format_exc()
+
+
+
 ps_slice = []
 process_name_slice = i18n("语音切分")
 
@@ -1847,9 +2064,21 @@ with gr.Blocks(title="GPT-SoVITS WebUI", analytics_enabled=False, js=js, css=css
                             )
                         with gr.Row():
                             info1Bb = gr.Textbox(label=process_info(process_name_gpt, "info"))
+                with gr.Accordion(label="1Bab-" + i18n("一键训练: 先训 SoVITS, 完成后自动接续 GPT 训练")):
+                    with gr.Row():
+                        with gr.Row():
+                            button1Bab_open = gr.Button(
+                                value=process_info(process_name_1bab, "open"), variant="primary", visible=True
+                            )
+                            button1Bab_close = gr.Button(
+                                value=process_info(process_name_1bab, "close"), variant="primary", visible=False
+                            )
+                        with gr.Row():
+                            info1Bab = gr.Textbox(label=process_info(process_name_1bab, "info"))
 
             button1Ba_close.click(close1Ba, [], [info1Ba, button1Ba_open, button1Ba_close])
             button1Bb_close.click(close1Bb, [], [info1Bb, button1Bb_open, button1Bb_close])
+            button1Bab_close.click(close1Bab, [], [info1Bab, button1Bab_open, button1Bab_close])
 
             with gr.TabItem("1C-" + i18n("推理")):
                 gr.Markdown(
@@ -1950,6 +2179,33 @@ with gr.Blocks(title="GPT-SoVITS WebUI", analytics_enabled=False, js=js, css=css
                 ],
                 [info1Bb, button1Bb_open, button1Bb_close, SoVITS_dropdown, GPT_dropdown],
             )
+            button1Bab_open.click(
+                open1Bab,
+                [
+                    version_checkbox,
+                    batch_size,
+                    total_epoch,
+                    exp_name,
+                    text_low_lr_rate,
+                    if_save_latest,
+                    if_save_every_weights,
+                    save_every_epoch,
+                    gpu_numbers1Ba,
+                    pretrained_s2G,
+                    pretrained_s2D,
+                    if_grad_ckpt,
+                    lora_rank,
+                    batch_size1Bb,
+                    total_epoch1Bb,
+                    if_dpo,
+                    if_save_latest1Bb,
+                    if_save_every_weights1Bb,
+                    save_every_epoch1Bb,
+                    gpu_numbers1Bb,
+                    pretrained_s1,
+                ],
+                [info1Bab, button1Bab_open, button1Bab_close, SoVITS_dropdown, GPT_dropdown],
+            )
             version_checkbox.change(
                 switch_version,
                 [version_checkbox],
@@ -1967,6 +2223,71 @@ with gr.Blocks(title="GPT-SoVITS WebUI", analytics_enabled=False, js=js, css=css
                     batched_infer_enabled,
                     lora_rank,
                 ],
+            )
+
+        with gr.TabItem(i18n("3-Preset汇总")):
+            gr.Markdown(
+                value=i18n(
+                    "把 slice 语音(list+文件夹) 与训练好的 SoVITS/GPT 两个权重复制汇总到 [目标根路径/实验名/] 下, 自动改写 list 内音频路径并生成自包含的 preset.json(写入 presets/)。"
+                )
+            )
+            with gr.Row():
+                exp_name_exp = gr.Textbox(label=i18n("*实验/模型名(=子文件夹名)"), value="xxx", interactive=True)
+                target_root_exp = gr.Textbox(
+                    label=i18n("*目标根路径(汇总到此目录下, 子文件夹以实验名命名)"), value="", interactive=True
+                )
+            with gr.Row():
+                slice_list_exp = gr.Textbox(
+                    label=i18n("*slice list 文件路径(.list, 通常在项目外)"), value="", interactive=True
+                )
+            with gr.Row():
+                with gr.Column(scale=2):
+                    with gr.Row():
+                        sovits_dd_exp = gr.Dropdown(
+                            label=i18n("SoVITS权重(选训练产物)"),
+                            choices=SoVITS_names,
+                            value=SoVITS_names[0],
+                            interactive=True,
+                        )
+                        gpt_dd_exp = gr.Dropdown(
+                            label=i18n("GPT权重(选训练产物)"),
+                            choices=GPT_names,
+                            value=GPT_names[-1],
+                            interactive=True,
+                        )
+                with gr.Column(scale=1):
+                    refresh_exp = gr.Button(i18n("刷新模型路径"), variant="primary")
+            with gr.Row():
+                prompt_lang_exp = gr.Dropdown(
+                    label=i18n("参考音频语种 prompt_lang"),
+                    choices=["zh", "ja", "en", "ko", "yue", "auto"],
+                    value="zh",
+                    interactive=True,
+                )
+                display_name_exp = gr.Textbox(label=i18n("preset 显示名 display_name"), value="", interactive=True)
+            with gr.Row():
+                ref_audio_exp = gr.Textbox(
+                    label=i18n("默认参考音频路径 default_ref_audio(留空则取 list 首条)"), value="", interactive=True
+                )
+            with gr.Row():
+                button_export = gr.Button(value=i18n("开始汇总迁移"), variant="primary")
+            with gr.Row():
+                info_export = gr.Textbox(label=i18n("汇总结果"), lines=8, interactive=False)
+
+            refresh_exp.click(fn=change_choices, inputs=[], outputs=[sovits_dd_exp, gpt_dd_exp])
+            button_export.click(
+                do_export_preset,
+                [
+                    exp_name_exp,
+                    target_root_exp,
+                    slice_list_exp,
+                    sovits_dd_exp,
+                    gpt_dd_exp,
+                    prompt_lang_exp,
+                    ref_audio_exp,
+                    display_name_exp,
+                ],
+                [info_export],
             )
 
         with gr.TabItem(i18n("2-GPT-SoVITS-变声")):
