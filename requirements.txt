@@ -15,10 +15,14 @@ cn2an
 pypinyin
 pyopenjtalk>=0.4.1
 g2p_en
-torchaudio
+# torch 版本钉死: 2.11+ 与本仓库训练代码(旧式 DDP/autocast)错配, 反向时 0xC0000005 崩溃
+# 注: cu 后缀(cu124)由安装脚本的 --index-url 决定, requirements 只钉版本号
+torch==2.6.0
+torchaudio==2.6.0
+# torchcodec  # 仅 torchaudio>=2.8 需要; 降级到 2.6 后用旧 soundfile 后端, 留着会把 torch 顶回 2.11
 modelscope
 sentencepiece
-transformers>=4.43,<=4.50
+transformers>=4.51,<=4.51.3  # 升级以支持 Fun-ASR-Nano-2512 的 qwen3 架构
 peft<0.18.0
 chardet
 PyYAML
