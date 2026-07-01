@@ -117,6 +117,7 @@ import signal
 import numpy as np
 import soundfile as sf
 from fastapi import FastAPI, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse
 import uvicorn
 from io import BytesIO
@@ -149,6 +150,15 @@ print(tts_config)
 tts_pipeline = TTS(tts_config)
 
 APP = FastAPI()
+
+# 允许跨域访问，方便前端/网页直接调用本 API 喵～
+APP.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class TTS_Request(BaseModel):

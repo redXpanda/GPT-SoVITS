@@ -45,6 +45,7 @@ import numpy as np
 import soundfile as sf
 import uvicorn
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse, HTMLResponse
 from pydantic import BaseModel, Field
 
@@ -434,6 +435,15 @@ _engine: TTSEngine = LocalGPTSoVITSEngine(tts_pipeline)
 _encoder = AudioEncoder()
 
 APP = FastAPI(title="GPT-SoVITS OpenAI-Compatible TTS API", version="1.0")
+
+# 允许跨域访问，方便前端/网页直接调用本 API 喵～
+APP.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def _build_request(body: SpeechRequest) -> TTSRequest:

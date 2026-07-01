@@ -119,6 +119,7 @@ import signal
 import numpy as np
 import soundfile as sf
 from fastapi import FastAPI, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse, FileResponse
 import uvicorn
 from io import BytesIO
@@ -136,6 +137,13 @@ parser = argparse.ArgumentParser(description="GPT-SoVITS api")
 parser.add_argument("-c", "--tts_config", type=str, default="GPT_SoVITS/configs/tts_infer.yaml", help="tts_infer路径")
 parser.add_argument("-a", "--bind_addr", type=str, default="127.0.0.1", help="default: 127.0.0.1")
 parser.add_argument("-p", "--port", type=int, default="9880", help="default: 9880")
+parser.add_argument(
+    "-pre",
+    "--preset",
+    type=str,
+    default="",
+    help="启动时自动加载的默认 preset 名称(presets/ 下的文件名, 可不含 .json), 留空则不加载",
+)
 args = parser.parse_args()
 config_path = args.tts_config
 # device = args.device
@@ -151,6 +159,15 @@ print(tts_config)
 tts_pipeline = TTS(tts_config)
 
 APP = FastAPI()
+
+# 允许跨域访问，方便前端/网页直接调用本 API 喵～
+APP.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class TTS_Request(BaseModel):
@@ -383,6 +400,15 @@ async def tts_handle(req: dict):
     return_fragment = req.get("return_fragment", False)
     media_type = req.get("media_type", "wav")
 
+    # 未传参考音频时, 回退到当前已加载 preset 的默认参考音频/文本/语言喵～
+    # 以「参考音频为空」为触发: 没音频则整套用默认; 文本/语言仅在同样为空时补默认, 尊重显式传入的值
+    if not req.get("ref_audio_path") and CURRENT_PRESET.get("default_ref_audio"):
+        req["ref_audio_path"] = CURRENT_PRESET["default_ref_audio"]
+        if not req.get("prompt_text"):
+            req["prompt_text"] = CURRENT_PRESET["default_ref_text"]
+        if not req.get("prompt_lang"):
+            req["prompt_lang"] = CURRENT_PRESET["default_ref_lang"]
+
     check_res = check_params(req)
     if check_res is not None:
         return check_res
@@ -612,7 +638,14 @@ PRESETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "presets"
 ALLOWED_REF_AUDIOS = set()
 
 # 当前已加载 preset 的状态(供 /speakers 返回其 slice 语音列表)喵～
-CURRENT_PRESET = {"name": None, "ref_audios": []}
+# default_ref_audio / default_ref_text / default_ref_lang 供 /tts_to_audio 覆盖参考音频时使用
+CURRENT_PRESET = {
+    "name": None,
+    "ref_audios": [],
+    "default_ref_audio": "",
+    "default_ref_text": "",
+    "default_ref_lang": "",
+}
 
 
 def parse_ref_list(list_path: str):
@@ -716,14 +749,14 @@ async def get_preset(name: str = None):
     )
 
 
-@APP.get("/load_preset")
-async def load_preset(name: str = None):
-    """一键加载预设: 切换 GPT/SoVITS 模型，并返回参考音频列表喵～"""
-    if name in [None, ""]:
-        return JSONResponse(status_code=400, content={"message": "name is required"})
+def apply_preset(name: str):
+    """加载预设核心逻辑(同步): 切换 GPT/SoVITS 模型并解析参考音频列表。
+
+    返回 (result_dict, error_response)。供 /load_preset 端点与启动时自动加载复用喵～
+    """
     data, err = load_preset_file(name)
     if err is not None:
-        return err
+        return None, err
 
     gpt_weights = data.get("gpt_weights", "")
     sovits_weights = data.get("sovits_weights", "")
@@ -736,7 +769,7 @@ async def load_preset(name: str = None):
             tts_pipeline.init_vits_weights(sovits_weights)
             loaded["sovits"] = True
     except Exception as e:
-        return JSONResponse(
+        return None, JSONResponse(
             status_code=400,
             content={"message": "load preset weights failed", "Exception": str(e), "loaded": loaded},
         )
@@ -745,23 +778,48 @@ async def load_preset(name: str = None):
     # 记录当前已加载 preset，供 /speakers 返回其 slice 语音列表喵～
     CURRENT_PRESET["name"] = name
     CURRENT_PRESET["ref_audios"] = ref_items
-    return JSONResponse(
-        status_code=200,
-        content={
-            "message": "success",
-            "name": name,
-            "display_name": data.get("display_name", name),
-            "prompt_lang": data.get("prompt_lang", ""),
-            "loaded": loaded,
-            "gpt_weights": gpt_weights,
-            "sovits_weights": sovits_weights,
-            "ref_audios": ref_items,
-        },
-    )
+
+    # 记录预设默认参考音频, 供 /tts_to_audio 在开关打开时覆盖请求参数喵～
+    # 文本/语言优先从 ref_list 里匹配同一条音频, 匹配不到则文本留空、语言回退到 prompt_lang
+    default_ref_audio = data.get("default_ref_audio", "")
+    default_ref_text = ""
+    default_ref_lang = data.get("prompt_lang", "")
+    if default_ref_audio:
+        ALLOWED_REF_AUDIOS.add(os.path.abspath(default_ref_audio))  # 加入白名单, 允许试听喵～
+        for it in ref_items:
+            if os.path.abspath(it["audio_path"]) == os.path.abspath(default_ref_audio):
+                default_ref_text = it["text"]
+                default_ref_lang = it["lang"]
+                break
+    CURRENT_PRESET["default_ref_audio"] = default_ref_audio
+    CURRENT_PRESET["default_ref_text"] = default_ref_text
+    CURRENT_PRESET["default_ref_lang"] = default_ref_lang
+    result = {
+        "message": "success",
+        "name": name,
+        "display_name": data.get("display_name", name),
+        "prompt_lang": data.get("prompt_lang", ""),
+        "loaded": loaded,
+        "gpt_weights": gpt_weights,
+        "sovits_weights": sovits_weights,
+        "ref_audios": ref_items,
+    }
+    return result, None
+
+
+@APP.get("/load_preset")
+async def load_preset(name: str = None):
+    """一键加载预设: 切换 GPT/SoVITS 模型，并返回参考音频列表喵～"""
+    if name in [None, ""]:
+        return JSONResponse(status_code=400, content={"message": "name is required"})
+    result, err = apply_preset(name)
+    if err is not None:
+        return err
+    return JSONResponse(status_code=200, content=result)
 
 
 # ============================================================================
-# 以下为从 api_v2.py 移植的额外接口，已适配本 preset 体系(不依赖 config / 参考音频目录) 喵～
+# 以下为从 api_v2.py 移植的额外接口，已适配本 preset 体系
 # ============================================================================
 
 
@@ -771,12 +829,25 @@ def get_preset_names():
     return [os.path.splitext(os.path.basename(p))[0] for p in sorted(glob.glob(os.path.join(PRESETS_DIR, "*.json")))]
 
 
+# /tts_to_audio 是否用「当前已加载 preset 的默认参考音频」覆盖请求里的参考音频参数喵～
+# False: 不覆盖, 完全尊重请求传入的 ref_audio_path/prompt_text/prompt_lang (当前默认)
+# True : 用 CURRENT_PRESET 的 default_ref_audio/text/lang 覆盖, 调用方无需关心参考音频
+TTS_TO_AUDIO_OVERRIDE_REF = False
+
+
 @APP.post("/tts_to_audio/")
 async def tts_to_audio(request: TTS_Request):
     # 原 api_v2.py 中此端点靠 config.llama_* 强制覆盖参考音频；本 preset 版去除 config 依赖，
     # 作为 POST /tts 的别名直接合成，仅保留原版 batch_size=10 的行为特征喵～
     req = request.dict()
     req["batch_size"] = 10
+
+    # 开关打开且已加载 preset 时, 用预设默认参考音频覆盖请求参数喵～
+    if TTS_TO_AUDIO_OVERRIDE_REF and CURRENT_PRESET.get("default_ref_audio"):
+        req["ref_audio_path"] = CURRENT_PRESET["default_ref_audio"]
+        req["prompt_text"] = CURRENT_PRESET["default_ref_text"]
+        req["prompt_lang"] = CURRENT_PRESET["default_ref_lang"]
+
     return await tts_handle(req)
 
 
@@ -806,6 +877,20 @@ async def tts_root_post_endpoint(request: TTS_Request):
 
 
 if __name__ == "__main__":
+    # 启动前若指定了默认 preset, 先加载模型再开启服务喵～
+    if args.preset:
+        print(f"[preset] 正在加载默认预设: {args.preset}")
+        result, err = apply_preset(args.preset)
+        if err is not None:
+            # err 是 JSONResponse, 取出其 body 打印, 加载失败不阻断服务启动喵～
+            print(f"[preset] 默认预设加载失败: {err.body.decode('utf-8', errors='ignore')}")
+        else:
+            print(
+                f"[preset] 默认预设加载成功: {result['display_name']} "
+                f"(GPT={result['loaded']['gpt']}, SoVITS={result['loaded']['sovits']}, "
+                f"参考音频 {len(result['ref_audios'])} 条)"
+            )
+
     try:
         if host == "None":  # 在调用时使用 -a None 参数，可以让api监听双栈
             host = None
