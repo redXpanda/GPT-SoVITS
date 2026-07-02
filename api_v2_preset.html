@@ -80,6 +80,7 @@
     </div>
     <div class="btn-row">
       <button class="ghost" id="btn-preview-ref" disabled>试听所选参考音频</button>
+      <button class="ghost" id="btn-set-default-ref" disabled>写入默认音频</button>
       <span class="status" id="preset-status"></span>
     </div>
     <audio id="ref-audio" controls style="display:none"></audio>
@@ -330,6 +331,7 @@ function fillRefAudios(items) {
   if (currentRefAudios.length === 0) {
     sel.innerHTML = '<option value="">(该预设无可用参考音频)</option>';
     $("btn-preview-ref").disabled = true;
+  $("btn-set-default-ref").disabled = true;
     return;
   }
   sel.innerHTML = currentRefAudios
@@ -343,6 +345,7 @@ function fillRefAudios(items) {
   sel.selectedIndex = 0;
   applyRefAudio();
   $("btn-preview-ref").disabled = false;
+  $("btn-set-default-ref").disabled = false;
 }
 
 // 把选中的参考音频回填到合成表单
@@ -399,6 +402,34 @@ function previewRefAudio() {
   audio.src = API + "/ref_audio?path=" + encodeURIComponent(it.audio_path);
   audio.style.display = "block";
   audio.play().catch(() => {});
+}
+
+// 将选中的参考音频写入 preset json 作为默认参考音频
+async function setDefaultRef() {
+  const presetName = $("preset_select").value;
+  if (!presetName) return setStatus("preset-status", "请先加载一个预设喵～", "err");
+  const idx = parseInt($("ref_select").value);
+  if (isNaN(idx) || !currentRefAudios[idx]) return setStatus("preset-status", "请先选择参考音频喵～", "err");
+  const audioPath = currentRefAudios[idx].audio_path;
+  const url = API + "/set_preset_default_ref?name=" + encodeURIComponent(presetName)
+    + "&audio_path=" + encodeURIComponent(audioPath);
+  log("GET " + url);
+  $("btn-set-default-ref").disabled = true;
+  try {
+    const resp = await fetch(url);
+    const data = await resp.json();
+    if (resp.ok) {
+      setStatus("preset-status", `已将默认音频写入「${presetName}」喵～`, "ok");
+    } else {
+      setStatus("preset-status", "写入失败: " + (data.message || resp.status), "err");
+    }
+    log("set_preset_default_ref 响应", data);
+  } catch (e) {
+    setStatus("preset-status", "请求异常: " + e, "err");
+    log("set_preset_default_ref 异常", String(e));
+  } finally {
+    $("btn-set-default-ref").disabled = false;
+  }
 }
 
 // 合成语音
@@ -512,6 +543,7 @@ $("btn-load-preset").onclick = loadPreset;
 $("btn-refresh-preset").onclick = loadPresetList;
 $("ref_select").onchange = applyRefAudio;
 $("btn-preview-ref").onclick = previewRefAudio;
+$("btn-set-default-ref").onclick = setDefaultRef;
 
 loadConfig();
 loadPresetList();

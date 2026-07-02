@@ -408,6 +408,20 @@ async def tts_handle(req: dict):
             req["prompt_text"] = CURRENT_PRESET["default_ref_text"]
         if not req.get("prompt_lang"):
             req["prompt_lang"] = CURRENT_PRESET["default_ref_lang"]
+    # 参考音频路径已指定但文件不存在时，回退到默认参考音频并打警告日志喵～
+    elif req.get("ref_audio_path") and not os.path.exists(req["ref_audio_path"]):
+        missing_path = req["ref_audio_path"]
+        if CURRENT_PRESET.get("default_ref_audio"):
+            print(
+                f"[WARNING] 参考音频不存在: {missing_path}，"
+                f"已回退到默认参考音频: {CURRENT_PRESET['default_ref_audio']}"
+            )
+            req["ref_audio_path"] = CURRENT_PRESET["default_ref_audio"]
+            # 原音频不存在，随之传来的 prompt_text/lang 已无效，无条件替换为默认值喵～
+            req["prompt_text"] = CURRENT_PRESET["default_ref_text"]
+            req["prompt_lang"] = CURRENT_PRESET["default_ref_lang"]
+        else:
+            print(f"[WARNING] 参考音频不存在: {missing_path}，且当前无默认参考音频可回退喵～")
 
     check_res = check_params(req)
     if check_res is not None:
@@ -818,6 +832,51 @@ async def load_preset(name: str = None):
     return JSONResponse(status_code=200, content=result)
 
 
+@APP.get("/set_preset_default_ref")
+async def set_preset_default_ref(name: str = None, audio_path: str = None):
+    """将选中的参考音频设为 preset 的 default_ref_audio 并写回 json 文件喵～
+
+    同时同步更新内存中 CURRENT_PRESET 状态（若该 preset 当前已加载）。
+    """
+    if name in [None, ""]:
+        return JSONResponse(status_code=400, content={"message": "name is required"})
+    if audio_path in [None, ""]:
+        return JSONResponse(status_code=400, content={"message": "audio_path is required"})
+
+    data, err = load_preset_file(name)
+    if err is not None:
+        return err
+
+    data["default_ref_audio"] = audio_path
+
+    safe_name = os.path.basename(name)
+    if not safe_name.endswith(".json"):
+        safe_name += ".json"
+    fpath = os.path.join(PRESETS_DIR, safe_name)
+    try:
+        with open(fpath, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"message": "write preset failed", "Exception": str(e)})
+
+    # 若该 preset 当前已加载，同步更新内存状态喵～
+    if CURRENT_PRESET.get("name") == name:
+        CURRENT_PRESET["default_ref_audio"] = audio_path
+        ALLOWED_REF_AUDIOS.add(os.path.abspath(audio_path))
+        # 从已解析的 ref_audios 里补 text/lang
+        default_ref_text = ""
+        default_ref_lang = data.get("prompt_lang", "")
+        for it in CURRENT_PRESET["ref_audios"]:
+            if os.path.abspath(it["audio_path"]) == os.path.abspath(audio_path):
+                default_ref_text = it["text"]
+                default_ref_lang = it["lang"]
+                break
+        CURRENT_PRESET["default_ref_text"] = default_ref_text
+        CURRENT_PRESET["default_ref_lang"] = default_ref_lang
+
+    return JSONResponse(status_code=200, content={"message": "success", "default_ref_audio": audio_path})
+
+
 # ============================================================================
 # 以下为从 api_v2.py 移植的额外接口，已适配本 preset 体系
 # ============================================================================
@@ -873,6 +932,7 @@ def speakerlist_endpoint():
 async def tts_root_post_endpoint(request: TTS_Request):
     # 与 GET /(返回测试页面) HTTP 方法不同，可共存；行为等同 POST /tts 喵～
     req = request.dict()
+    req["text_split_method"]='cut0'
     return await tts_handle(req)
 
 
